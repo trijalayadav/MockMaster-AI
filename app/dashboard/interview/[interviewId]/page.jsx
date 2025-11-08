@@ -6,6 +6,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import Webcam from "react-webcam";
 import { Lightbulb, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import Link from "next/link"; // ADD THIS IMPORT
 
 function Interview({ params }) {
     const { interviewId } = React.use(params);
@@ -43,16 +44,6 @@ function Interview({ params }) {
         console.log(interviewId);
         GetInterviewDetails();
     }, [interviewId, GetInterviewDetails]);
-
-    const handleStartInterview = () => {
-        if (!webCamEnabled) {
-            alert("Please enable your webcam and microphone before starting.");
-            return;
-        }
-        // Add your start interview logic here
-        // Example: router.push(`/interview/${interviewId}/start`);
-        console.log("Starting interview...");
-    };
 
     if (loading) {
         return (
@@ -148,13 +139,14 @@ function Interview({ params }) {
 
             {/* Start Interview Button */}
             <div className="flex justify-end mt-10">
-                <Button
-                    onClick={handleStartInterview}
-                    disabled={!webCamEnabled}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-8"
-                >
-                    Start Interview
-                </Button>
+                <Link href={`/dashboard/interview/${interviewId}/start`}>
+                    <Button
+                        disabled={!webCamEnabled}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-8"
+                    >
+                        Start Interview
+                    </Button>
+                </Link>
             </div>
         </div>
     );
