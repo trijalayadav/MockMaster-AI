@@ -5,8 +5,11 @@ import { MockInterview } from '@/utils/schema'
 import { eq } from 'drizzle-orm'
 import QuestionsSection from './_components/QuestionsSection'
 import RecordAnswerSection from './_components/RecordAnswerSection'
+import { Button } from '@/components/ui/button'
+import { useRouter } from 'next/navigation'
 
 function StartInterview({ params }) {
+    const router = useRouter();
     const unwrappedParams = use(params);
     const interviewId = unwrappedParams?.interviewId;
     const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
@@ -35,17 +38,14 @@ function StartInterview({ params }) {
             if (result.length > 0) {
                 setInterviewData(result[0]);
 
-                // The field is called jsonMockResp
                 if (result[0].jsonMockResp) {
                     try {
-                        // Parse the JSON string
                         const jsonMockResponse = typeof result[0].jsonMockResp === 'string'
                             ? JSON.parse(result[0].jsonMockResp)
                             : result[0].jsonMockResp;
 
                         console.log("Parsed response:", jsonMockResponse);
 
-                        // Extract the questions array from the parsed object
                         const questions = jsonMockResponse.questions || [];
 
                         console.log("Questions array:", questions);
@@ -76,6 +76,23 @@ function StartInterview({ params }) {
             GetInterviewDetails();
         }
     }, [interviewId, GetInterviewDetails])
+
+    const handlePreviousQuestion = () => {
+        if (activeQuestionIndex > 0) {
+            setActiveQuestionIndex(activeQuestionIndex - 1);
+        }
+    };
+
+    const handleNextQuestion = () => {
+        if (activeQuestionIndex < mockInterviewQuestions.length - 1) {
+            setActiveQuestionIndex(activeQuestionIndex + 1);
+        }
+    };
+
+    const handleEndInterview = () => {
+        // Navigate to feedback page
+        router.push(`/dashboard/interview/${interviewId}/feedback`);
+    };
 
     if (loading) {
         return (
@@ -128,7 +145,40 @@ function StartInterview({ params }) {
                 />
 
                 {/* Video/Audio Recording */}
-                <RecordAnswerSection />
+                <RecordAnswerSection
+                    mockInterviewQuestions={mockInterviewQuestions}
+                    activeQuestionIndex={activeQuestionIndex}
+                    interviewData={interviewData}
+                />
+            </div>
+
+            {/* Navigation Buttons */}
+            <div className='flex justify-end gap-4 mt-6'>
+                {activeQuestionIndex > 0 && (
+                    <Button
+                        onClick={handlePreviousQuestion}
+                        variant="outline"
+                    >
+                        Previous Question
+                    </Button>
+                )}
+
+                {activeQuestionIndex < mockInterviewQuestions?.length - 1 && (
+                    <Button
+                        onClick={handleNextQuestion}
+                    >
+                        Next Question
+                    </Button>
+                )}
+
+                {activeQuestionIndex === mockInterviewQuestions?.length - 1 && (
+                    <Button
+                        onClick={handleEndInterview}
+                        className="bg-green-600 hover:bg-green-700"
+                    >
+                        End Interview
+                    </Button>
+                )}
             </div>
         </div>
     )

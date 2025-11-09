@@ -65,32 +65,6 @@ function QuestionsSection({ mockInterviewQuestions, activeQuestionIndex, onQuest
                 />
             </div>
 
-            {/* Navigation Buttons */}
-            <div className='flex justify-between gap-4 mt-4'>
-                <button
-                    onClick={() => activeQuestionIndex > 0 && onQuestionClick(activeQuestionIndex - 1)}
-                    disabled={activeQuestionIndex === 0}
-                    aria-label="Previous question"
-                    className={`px-6 py-2 rounded-lg font-medium transition-all ${activeQuestionIndex === 0
-                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                        : 'bg-primary text-white hover:bg-primary/90 hover:shadow-md'
-                        }`}
-                >
-                    Previous
-                </button>
-                <button
-                    onClick={() => activeQuestionIndex < mockInterviewQuestions.length - 1 && onQuestionClick(activeQuestionIndex + 1)}
-                    disabled={activeQuestionIndex === mockInterviewQuestions.length - 1}
-                    aria-label="Next question"
-                    className={`px-6 py-2 rounded-lg font-medium transition-all ${activeQuestionIndex === mockInterviewQuestions.length - 1
-                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                        : 'bg-primary text-white hover:bg-primary/90 hover:shadow-md'
-                        }`}
-                >
-                    Next
-                </button>
-            </div>
-
             {/* Note Section */}
             <div className='border rounded-lg p-5 bg-blue-50 mt-6'>
                 <h2 className='flex gap-2 items-center text-primary mb-2'>
@@ -99,7 +73,7 @@ function QuestionsSection({ mockInterviewQuestions, activeQuestionIndex, onQuest
                 </h2>
                 <p className='text-sm text-primary leading-relaxed'>
                     {process.env.NEXT_PUBLIC_QUESTION_NOTE ||
-                        "Click on any question to navigate, or use Previous/Next buttons. Take your time to prepare your answer before recording."}
+                        "Click on any question number above to navigate between questions. Take your time to prepare your answer before recording."}
                 </p>
             </div>
         </div>
