@@ -8,6 +8,7 @@ import { db } from '@/utils/db';
 import { userAnswers } from '@/utils/schema';
 import { useUser } from '@clerk/nextjs';
 import moment from 'moment';
+import { eq, and } from 'drizzle-orm';
 
 // Dynamically import to avoid SSR issues
 const Webcam = dynamic(() => import('react-webcam'), { ssr: false });
@@ -269,7 +270,7 @@ Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
                 feedbackText = parsedFeedback.feedback || 'Good effort!';
                 rating = parsedFeedback.rating || 'N/A';
 
-                // Log feedback to console only (not displaying on UI)
+                // Log feedback to console
                 console.log('==========================================');
                 console.log('📊 INTERVIEW FEEDBACK');
                 console.log('==========================================');
@@ -303,22 +304,59 @@ Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
                 rating = 'N/A';
             }
 
-            // Save to database
+            // 🔥 FIX: Check if answer already exists for this question
             try {
-                console.log('Saving to database...');
-                const dbResponse = await db.insert(userAnswers).values({
-                    mockIdRef: interviewData.mockId,
-                    question: currentQuestion,
-                    correctAns: correctAnswer || '',
-                    userAns: finalAnswer,
-                    feedback: feedbackText,
-                    rating: rating,
-                    userEmail: user.primaryEmailAddress.emailAddress,
-                    createdAt: moment().format('DD-MM-YYYY')
-                });
+                console.log('Checking for existing answer...');
 
-                console.log('Database save response:', dbResponse);
-                toast.success('Answer saved successfully!');
+                // Using eq and and from drizzle-orm (imported at top of file)
+
+                const existingAnswer = await db
+                    .select()
+                    .from(userAnswers)
+                    .where(
+                        and(
+                            eq(userAnswers.mockIdRef, interviewData.mockId),
+                            eq(userAnswers.question, currentQuestion)
+                        )
+                    );
+
+                if (existingAnswer.length > 0) {
+                    // Update existing answer
+                    console.log('Updating existing answer...');
+                    await db
+                        .update(userAnswers)
+                        .set({
+                            userAns: finalAnswer,
+                            feedback: feedbackText,
+                            rating: rating,
+                            correctAns: correctAnswer || '',
+                            createdAt: moment().format('DD-MM-YYYY')
+                        })
+                        .where(
+                            and(
+                                eq(userAnswers.mockIdRef, interviewData.mockId),
+                                eq(userAnswers.question, currentQuestion)
+                            )
+                        );
+
+                    toast.success('Answer updated successfully!');
+                } else {
+                    // Insert new answer
+                    console.log('Saving new answer to database...');
+                    await db.insert(userAnswers).values({
+                        mockIdRef: interviewData.mockId,
+                        question: currentQuestion,
+                        correctAns: correctAnswer || '',
+                        userAns: finalAnswer,
+                        feedback: feedbackText,
+                        rating: rating,
+                        userEmail: user.primaryEmailAddress.emailAddress,
+                        createdAt: moment().format('DD-MM-YYYY')
+                    });
+
+                    toast.success('Answer saved successfully!');
+                }
+
             } catch (dbError) {
                 console.error('Database error:', dbError);
                 toast.error('Failed to save answer to database. Please try again.');
