@@ -12,6 +12,7 @@ import {
     Zap,
     Target
 } from 'lucide-react'
+import Header from '../dashboard/_components/Header';
 
 function HowItWorksPage() {
     const steps = [
@@ -89,7 +90,8 @@ function HowItWorksPage() {
         'Practice at your own pace'
     ];
 
-    return (
+    return (<>
+        <Header />
         <div className='min-h-screen bg-gradient-to-b from-gray-50 to-white'>
             {/* Hero Section */}
             <div className='bg-primary text-white py-16 px-6 md:px-10'>
@@ -217,6 +219,7 @@ function HowItWorksPage() {
                 </div>
             </div>
         </div>
+    </>
     )
 }
 
