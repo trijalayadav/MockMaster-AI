@@ -39,6 +39,17 @@ function Feedback({ params }) {
                 .orderBy(userAnswers.id);
 
             console.log('Feedback result:', result);
+            console.log('Total questions:', result.length);
+
+            // Debug: Log each question
+            result.forEach((item, idx) => {
+                console.log(`Question ${idx + 1}:`, {
+                    id: item.id,
+                    question: item.question,
+                    rating: item.rating
+                });
+            });
+
             setFeedbackList(result);
         } catch (err) {
             console.error('Error fetching feedback:', err);
@@ -109,6 +120,7 @@ function Feedback({ params }) {
         <div className='p-10'>
             <h2 className='text-3xl font-bold text-green-500'>Congratulations!</h2>
             <h2 className='font-bold text-2xl mt-2'>Here is your interview feedback</h2>
+
             <h2 className='text-primary text-lg my-3'>
                 Your overall interview rating: <strong>{calculateOverallRating()}</strong>
             </h2>
@@ -118,9 +130,12 @@ function Feedback({ params }) {
             </h2>
 
             {feedbackList && feedbackList.map((item, index) => (
-                <Collapsible key={index} className='mt-5'>
-                    <CollapsibleTrigger className='p-2 bg-secondary rounded-lg my-2 text-left gap-7 w-full flex justify-between items-center'>
-                        <span className='font-medium'>{item.question}</span>
+                <Collapsible key={item.id || index} className='mt-5'>
+                    <CollapsibleTrigger className='p-2 bg-secondary rounded-lg my-2 text-left gap-7 w-full flex justify-between items-center hover:bg-gray-100 transition-colors'>
+                        <span className='font-medium'>
+                            <span className='text-primary mr-2'>Question {index + 1}:</span>
+                            {item.question}
+                        </span>
                         <ChevronsUpDown className='h-5 w-5 flex-shrink-0' />
                     </CollapsibleTrigger>
                     <CollapsibleContent className='mt-2 space-y-3'>
@@ -131,7 +146,7 @@ function Feedback({ params }) {
 
                         <div className='p-3 border rounded-lg bg-blue-50 border-blue-200'>
                             <strong className='text-blue-900'>Your Answer: </strong>
-                            <p className='text-gray-700 mt-1'>{item.userAns}</p>
+                            <p className='text-gray-700 mt-1'>{item.userAns || 'No answer provided'}</p>
                         </div>
 
                         {item.correctAns && (
@@ -143,7 +158,7 @@ function Feedback({ params }) {
 
                         <div className='p-3 border rounded-lg bg-purple-50 border-purple-200'>
                             <strong className='text-purple-900'>Feedback: </strong>
-                            <p className='text-gray-700 mt-1'>{item.feedback}</p>
+                            <p className='text-gray-700 mt-1'>{item.feedback || 'No feedback provided'}</p>
                         </div>
                     </CollapsibleContent>
                 </Collapsible>
@@ -158,6 +173,7 @@ function Feedback({ params }) {
                 </Button>
                 <Button
                     onClick={() => router.push(`/dashboard/interview/${interviewId}/start`)}
+                    className="bg-black hover:bg-gray-800"
                 >
                     Retake Interview
                 </Button>
