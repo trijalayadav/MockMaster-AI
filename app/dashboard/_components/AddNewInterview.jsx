@@ -5,11 +5,12 @@ import { v4 as uuidv4 } from "uuid";
 import moment from "moment";
 import { db } from "@/utils/db";
 import { MockInterview } from "@/utils/schema";
-import generateInterviewQuestions from "../../../utils/GeminiAIModel.js";
+import generateInterviewQuestions from "../../../utils/GroqAIModel.js";
 import { useRouter } from "next/navigation";
 
 const AddNewInterview = ({ onInterviewStart }) => {
     const { user } = useUser();
+    const router = useRouter();
     const [openDialog, setOpenDialog] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [formData, setFormData] = useState({
@@ -50,8 +51,6 @@ const AddNewInterview = ({ onInterviewStart }) => {
         return Object.keys(newErrors).length === 0;
     };
 
-
-
     const handleSubmit = async (e) => {
         e.preventDefault();
 
@@ -88,19 +87,25 @@ const AddNewInterview = ({ onInterviewStart }) => {
 
             console.log("Interview saved to database:", resp);
 
+            const savedMockId = resp[0]?.mockId;
+
             // Call parent callback with complete data
             if (interviewQuestions && onInterviewStart) {
                 onInterviewStart({
                     ...formData,
                     questions: interviewQuestions,
-                    mockId: resp[0]?.mockId
+                    mockId: savedMockId
                 });
             }
 
-            // Close dialog and reset form on success
+            // Close dialog and reset form
             setOpenDialog(false);
             setFormData({ role: "", description: "", experience: "" });
             setErrors({});
+
+            // ✅ Navigate to interview page
+            router.push(`/dashboard/interview/${savedMockId}`);
+
         } catch (error) {
             console.error("Error during interview creation:", error);
             setErrors({
@@ -251,7 +256,7 @@ const AddNewInterview = ({ onInterviewStart }) => {
                                 )}
                             </div>
 
-                            {/* Error Message */}
+                            {/* Submit Error */}
                             {errors.submit && (
                                 <div className="bg-red-50 border border-red-200 rounded-md p-3">
                                     <p className="text-red-600 text-sm">{errors.submit}</p>

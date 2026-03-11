@@ -3,7 +3,7 @@ import dynamic from 'next/dynamic';
 import { Webcam as WebcamIcon, Mic, Video, VideoOff } from 'lucide-react'
 import React, { useState, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
-import { chatSession } from '@/utils/GeminiAIModel';
+import { generateFeedback } from '@/utils/semanticFeedbackModel';
 import { db } from '@/utils/db';
 import { userAnswers } from '@/utils/schema';
 import { useUser } from '@clerk/nextjs';
@@ -32,7 +32,6 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
         setInterimResult('');
         setError('');
 
-        // Stop recording if switching questions
         if (isRecordingRef.current && recognitionRef.current) {
             try {
                 isRecordingRef.current = false;
@@ -79,10 +78,7 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
 
                 recognitionRef.current.onerror = (event) => {
                     console.error('Speech recognition error:', event.error);
-
-                    if (event.error === 'aborted') {
-                        return;
-                    }
+                    if (event.error === 'aborted') return;
 
                     let errorMessage = '';
                     switch (event.error) {
@@ -149,7 +145,7 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
 
         setError('');
         setInterimResult('');
-        setUserAnswer(''); // Clear the answer when starting a new recording
+        setUserAnswer('');
 
         try {
             recognitionRef.current.start();
@@ -181,7 +177,6 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
     };
 
     const UpdateUserAnswer = async () => {
-        // Wait for any final transcripts
         await new Promise(resolve => setTimeout(resolve, 500));
 
         const finalAnswer = userAnswer.trim();
@@ -191,28 +186,19 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
             return;
         }
 
-        // Validate question exists
         if (!mockInterviewQuestions || !mockInterviewQuestions[activeQuestionIndex]) {
             toast.error('No question found. Please try again.');
             return;
         }
 
         const currentQuestion = mockInterviewQuestions[activeQuestionIndex]?.question;
-        const correctAnswer = mockInterviewQuestions[activeQuestionIndex]?.answer;
+        const correctAnswer   = mockInterviewQuestions[activeQuestionIndex]?.answer;
 
         if (!currentQuestion) {
             toast.error('Invalid question data. Please try again.');
             return;
         }
 
-        // Validate chatSession
-        if (!chatSession || typeof chatSession.sendMessage !== 'function') {
-            console.error('Chat session not initialized');
-            toast.error('AI service not available. Please check your NEXT_PUBLIC_GEMINI_API_KEY.');
-            return;
-        }
-
-        // Validate user and interviewData
         if (!user?.primaryEmailAddress?.emailAddress) {
             toast.error('User not authenticated. Please log in.');
             return;
@@ -226,90 +212,33 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
         setLoading(true);
 
         try {
-            const feedbackPrompt = `Question: ${currentQuestion}
-User Answer: ${finalAnswer}
+            // ── Use Semantic AI Model instead of Gemini ──────────────
+            toast.info('Analysing your answer with AI...');
 
-Please analyze this interview answer and provide a rating and detailed feedback. Return your response ONLY as a valid JSON object in this exact format (no markdown, no code blocks, no extra text):
+            const { rating, feedback, normalizedAnswer, breakdown } = await generateFeedback(
+                currentQuestion,
+                finalAnswer,
+                correctAnswer || ''
+            );
 
-{
-  "rating": "8/10",
-  "feedback": "Your answer demonstrates good understanding. You mentioned key points about... However, you could improve by adding more specific examples and discussing...",
-  "strengths": ["Clear communication", "Good technical knowledge", "Structured response"],
-  "improvements": ["Add more specific examples", "Discuss scalability considerations", "Mention best practices"]
-}
+            // Use normalized answer (proper caps + punctuation) for DB storage
+            const answerToSave = normalizedAnswer || finalAnswer;
 
-Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
+            // Log feedback to console
+            console.log('==========================================');
+            console.log('📊 INTERVIEW FEEDBACK (Semantic AI)');
+            console.log('==========================================');
+            console.log('Question:', currentQuestion);
+            console.log('------------------------------------------');
+            console.log('User Answer:', finalAnswer);
+            console.log('------------------------------------------');
+            console.log('Rating:', rating);
+            console.log('Feedback:', feedback);
+            console.log('Breakdown:', breakdown);
+            console.log('==========================================');
 
-            console.log('Sending feedback request to AI...');
-            const result = await chatSession.sendMessage(feedbackPrompt);
-
-            if (!result || !result.response) {
-                throw new Error('Invalid response from AI service');
-            }
-
-            const mockJsonResp = result.response.text();
-            console.log('Raw AI Response:', mockJsonResp);
-
-            let parsedFeedback = null;
-            let feedbackText = '';
-            let rating = '';
-
+            // ── Save to database ─────────────────────────────────────
             try {
-                let cleanedResponse = mockJsonResp
-                    .replace(/```json/gi, "")
-                    .replace(/```/g, "")
-                    .replace(/[\u201C\u201D]/g, '"')
-                    .trim();
-
-                const jsonMatch = cleanedResponse.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                    cleanedResponse = jsonMatch[0];
-                }
-
-                parsedFeedback = JSON.parse(cleanedResponse);
-                feedbackText = parsedFeedback.feedback || 'Good effort!';
-                rating = parsedFeedback.rating || 'N/A';
-
-                // Log feedback to console
-                console.log('==========================================');
-                console.log('📊 INTERVIEW FEEDBACK');
-                console.log('==========================================');
-                console.log('Question:', currentQuestion);
-                console.log('------------------------------------------');
-                console.log('User Answer:', finalAnswer);
-                console.log('------------------------------------------');
-                console.log('Rating:', rating);
-                console.log('------------------------------------------');
-                console.log('Feedback:', feedbackText);
-                console.log('------------------------------------------');
-                if (parsedFeedback.strengths) {
-                    console.log('Strengths:');
-                    parsedFeedback.strengths.forEach((strength, index) => {
-                        console.log(`  ${index + 1}. ${strength}`);
-                    });
-                    console.log('------------------------------------------');
-                }
-                if (parsedFeedback.improvements) {
-                    console.log('Areas for Improvement:');
-                    parsedFeedback.improvements.forEach((improvement, index) => {
-                        console.log(`  ${index + 1}. ${improvement}`);
-                    });
-                    console.log('------------------------------------------');
-                }
-                console.log('==========================================');
-            } catch (parseError) {
-                console.error('Failed to parse JSON:', parseError);
-                console.log('Raw response that failed to parse:', mockJsonResp);
-                feedbackText = mockJsonResp || 'Unable to parse feedback';
-                rating = 'N/A';
-            }
-
-            // 🔥 FIX: Check if answer already exists for this question
-            try {
-                console.log('Checking for existing answer...');
-
-                // Using eq and and from drizzle-orm (imported at top of file)
-
                 const existingAnswer = await db
                     .select()
                     .from(userAnswers)
@@ -321,16 +250,14 @@ Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
                     );
 
                 if (existingAnswer.length > 0) {
-                    // Update existing answer
-                    console.log('Updating existing answer...');
                     await db
                         .update(userAnswers)
                         .set({
-                            userAns: finalAnswer,
-                            feedback: feedbackText,
-                            rating: rating,
+                            userAns:    answerToSave,
+                            feedback:   feedback,
+                            rating:     rating,
                             correctAns: correctAnswer || '',
-                            createdAt: moment().format('DD-MM-YYYY')
+                            createdAt:  moment().format('DD-MM-YYYY')
                         })
                         .where(
                             and(
@@ -338,42 +265,28 @@ Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
                                 eq(userAnswers.question, currentQuestion)
                             )
                         );
-
                     toast.success('Answer updated successfully!');
                 } else {
-                    // Insert new answer
-                    console.log('Saving new answer to database...');
                     await db.insert(userAnswers).values({
-                        mockIdRef: interviewData.mockId,
-                        question: currentQuestion,
+                        mockIdRef:  interviewData.mockId,
+                        question:   currentQuestion,
                         correctAns: correctAnswer || '',
-                        userAns: finalAnswer,
-                        feedback: feedbackText,
-                        rating: rating,
-                        userEmail: user.primaryEmailAddress.emailAddress,
-                        createdAt: moment().format('DD-MM-YYYY')
+                        userAns:    answerToSave,
+                        feedback:   feedback,
+                        rating:     rating,
+                        userEmail:  user.primaryEmailAddress.emailAddress,
+                        createdAt:  moment().format('DD-MM-YYYY')
                     });
-
                     toast.success('Answer saved successfully!');
                 }
-
             } catch (dbError) {
                 console.error('Database error:', dbError);
                 toast.error('Failed to save answer to database. Please try again.');
             }
 
-        } catch (error) {
-            console.error('Error getting feedback:', error);
-
-            if (error.message.includes('API key') || error.message.includes('not found')) {
-                toast.error('API key error. Please check your NEXT_PUBLIC_GEMINI_API_KEY in .env.local');
-            } else if (error.message.includes('quota') || error.message.includes('limit')) {
-                toast.error('API quota exceeded. Please try again later.');
-            } else if (error.message.includes('404')) {
-                toast.error('Model not found. Make sure you updated to gemini-2.5-flash in GeminiAIModel.js');
-            } else {
-                toast.error('Failed to get feedback. Please try again.');
-            }
+        } catch (err) {
+            console.error('Error generating feedback:', err);
+            toast.error('Failed to analyse answer. Please try again.');
         } finally {
             setLoading(false);
         }
@@ -387,11 +300,8 @@ Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
         }
     };
 
-    if (!isMounted) {
-        return null;
-    }
+    if (!isMounted) return null;
 
-    // Validate props
     if (!mockInterviewQuestions || mockInterviewQuestions.length === 0) {
         return (
             <div className='flex items-center justify-center flex-col p-8'>
@@ -408,7 +318,9 @@ Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
             <div className='flex items-center justify-center flex-col p-8'>
                 <div className='text-center'>
                     <p className='text-red-600 font-semibold'>Invalid question index</p>
-                    <p className='text-gray-500 text-sm mt-2'>Index: {activeQuestionIndex}, Total: {mockInterviewQuestions.length}</p>
+                    <p className='text-gray-500 text-sm mt-2'>
+                        Index: {activeQuestionIndex}, Total: {mockInterviewQuestions.length}
+                    </p>
                 </div>
             </div>
         );
@@ -417,15 +329,6 @@ Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
     return (
         <div className='flex items-center justify-center flex-col'>
             <div className='flex flex-col justify-center items-center p-5 border rounded-lg w-full'>
-                {/* AI Service Warning */}
-                {(!chatSession || typeof chatSession.sendMessage !== 'function') && (
-                    <div className='mb-4 w-full p-3 bg-yellow-50 border border-yellow-200 rounded-lg'>
-                        <p className='text-yellow-800 text-sm font-semibold'>⚠️ AI Feedback Unavailable</p>
-                        <p className='text-yellow-700 text-xs mt-1'>
-                            Gemini AI is not configured. Please check your NEXT_PUBLIC_GEMINI_API_KEY in .env.local file.
-                        </p>
-                    </div>
-                )}
 
                 {/* Webcam Display */}
                 <div className='relative flex justify-center items-center bg-black rounded-lg w-full h-72 overflow-hidden'>
@@ -436,11 +339,7 @@ Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
                                 mirrored={true}
                                 audio={true}
                                 className='rounded-lg'
-                                style={{
-                                    height: '100%',
-                                    width: '100%',
-                                    objectFit: 'cover'
-                                }}
+                                style={{ height: '100%', width: '100%', objectFit: 'cover' }}
                             />
                             {isRecording && (
                                 <div className='absolute top-3 right-3 flex items-center gap-2 bg-red-600 text-white px-3 py-1.5 rounded-full text-xs font-semibold'>
@@ -457,7 +356,7 @@ Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
                     )}
                 </div>
 
-                {/* Live Transcript Display */}
+                {/* Live Transcript */}
                 {(userAnswer || interimResult) && (
                     <div className='mt-4 w-full p-4 bg-gray-50 border border-gray-200 rounded-lg max-h-40 overflow-y-auto'>
                         <h3 className='text-sm font-semibold text-gray-700 mb-2'>Your Answer:</h3>
@@ -471,24 +370,19 @@ Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
                 )}
 
                 <div className='mt-4 w-full space-y-3'>
-                    {/* Enable Webcam Button */}
+                    {/* Webcam Toggle */}
                     <button
                         onClick={() => setIsWebcamEnabled(!isWebcamEnabled)}
-                        className={`w-full px-6 py-2 rounded-lg font-medium transition flex items-center justify-center gap-2 ${isWebcamEnabled
-                            ? 'bg-red-600 text-white hover:bg-red-700'
-                            : 'bg-blue-600 text-white hover:bg-blue-700'
-                            }`}
+                        className={`w-full px-6 py-2 rounded-lg font-medium transition flex items-center justify-center gap-2 ${
+                            isWebcamEnabled
+                                ? 'bg-red-600 text-white hover:bg-red-700'
+                                : 'bg-blue-600 text-white hover:bg-blue-700'
+                        }`}
                     >
                         {isWebcamEnabled ? (
-                            <>
-                                <VideoOff className='w-4 h-4' />
-                                Disable Webcam
-                            </>
+                            <><VideoOff className='w-4 h-4' /> Disable Webcam</>
                         ) : (
-                            <>
-                                <Video className='w-4 h-4' />
-                                Enable Webcam
-                            </>
+                            <><Video className='w-4 h-4' /> Enable Webcam</>
                         )}
                     </button>
 
@@ -496,15 +390,20 @@ Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
                     <button
                         onClick={handleRecording}
                         disabled={!isWebcamEnabled || loading}
-                        className={`w-full px-6 py-2 rounded-lg font-semibold transition flex items-center justify-center gap-2 ${!isWebcamEnabled || loading
-                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                            : isRecording
-                                ? 'bg-red-600 text-white hover:bg-red-700'
-                                : 'bg-primary text-white hover:bg-primary/90'
-                            }`}
+                        className={`w-full px-6 py-2 rounded-lg font-semibold transition flex items-center justify-center gap-2 ${
+                            !isWebcamEnabled || loading
+                                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                : isRecording
+                                    ? 'bg-red-600 text-white hover:bg-red-700'
+                                    : 'bg-primary text-white hover:bg-primary/90'
+                        }`}
                     >
                         <Mic className='w-4 h-4' />
-                        {loading ? 'Processing & Saving...' : isRecording ? 'Stop Recording' : 'Record Answer'}
+                        {loading
+                            ? 'Analysing with AI...'
+                            : isRecording
+                                ? 'Stop Recording'
+                                : 'Record Answer'}
                     </button>
                 </div>
 
@@ -516,7 +415,7 @@ Make sure the feedback is constructive, specific, and 3-5 sentences long.`;
                 )}
             </div>
         </div>
-    )
+    );
 }
 
-export default RecordAnswerSection
+export default RecordAnswerSection;
