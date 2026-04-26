@@ -9,9 +9,16 @@ import { userAnswers } from '@/utils/schema';
 import { useUser } from '@clerk/nextjs';
 import moment from 'moment';
 import { eq, and } from 'drizzle-orm';
+import Groq from 'groq-sdk';
 
 // Dynamically import to avoid SSR issues
 const Webcam = dynamic(() => import('react-webcam'), { ssr: false });
+
+// Groq client for Whisper transcription
+const groq = new Groq({
+    apiKey: process.env.NEXT_PUBLIC_GROQ_API_KEY,
+    dangerouslyAllowBrowser: true
+});
 
 function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, interviewData }) {
     const [isWebcamEnabled, setIsWebcamEnabled] = useState(false);
@@ -19,159 +26,111 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
     const webcamRef = useRef(null);
     const [userAnswer, setUserAnswer] = useState('');
     const [error, setError] = useState('');
-    const [interimResult, setInterimResult] = useState('');
     const [isRecording, setIsRecording] = useState(false);
     const [loading, setLoading] = useState(false);
-    const recognitionRef = useRef(null);
+    const [isTranscribing, setIsTranscribing] = useState(false);
+    const mediaRecorderRef = useRef(null);
+    const audioChunksRef = useRef([]);
     const isRecordingRef = useRef(false);
     const { user } = useUser();
 
     // Reset answer when question changes
     useEffect(() => {
         setUserAnswer('');
-        setInterimResult('');
         setError('');
 
-        if (isRecordingRef.current && recognitionRef.current) {
+        if (isRecordingRef.current && mediaRecorderRef.current) {
             try {
                 isRecordingRef.current = false;
-                recognitionRef.current.stop();
+                mediaRecorderRef.current.stop();
             } catch (err) {
-                console.error('Error stopping recognition:', err);
+                console.error('Error stopping recording:', err);
             }
             setIsRecording(false);
         }
     }, [activeQuestionIndex]);
 
-    // Initialize speech recognition once on mount
     useEffect(() => {
         setIsMounted(true);
-
-        if (typeof window !== 'undefined') {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (SpeechRecognition) {
-                recognitionRef.current = new SpeechRecognition();
-                recognitionRef.current.continuous = true;
-                recognitionRef.current.interimResults = true;
-                recognitionRef.current.lang = 'en-US';
-
-                recognitionRef.current.onresult = (event) => {
-                    let interim = '';
-                    let finalTranscripts = [];
-
-                    for (let i = event.resultIndex; i < event.results.length; i++) {
-                        const transcript = event.results[i][0].transcript;
-                        if (event.results[i].isFinal) {
-                            finalTranscripts.push(transcript);
-                        } else {
-                            interim = transcript;
-                        }
-                    }
-
-                    setInterimResult(interim);
-
-                    if (finalTranscripts.length > 0) {
-                        const newText = finalTranscripts.join(' ') + ' ';
-                        setUserAnswer(prev => prev + newText);
-                    }
-                };
-
-                recognitionRef.current.onerror = (event) => {
-                    console.error('Speech recognition error:', event.error);
-                    if (event.error === 'aborted') return;
-
-                    let errorMessage = '';
-                    switch (event.error) {
-                        case 'no-speech':
-                            errorMessage = 'No speech detected. Please try again.';
-                            break;
-                        case 'not-allowed':
-                            errorMessage = 'Microphone access denied. Please enable microphone permissions.';
-                            break;
-                        case 'network':
-                            errorMessage = 'Network error. Please check your internet connection.';
-                            break;
-                        case 'audio-capture':
-                            errorMessage = 'No microphone found. Please connect a microphone.';
-                            break;
-                        default:
-                            errorMessage = `Speech recognition error: ${event.error}`;
-                    }
-
-                    setError(errorMessage);
-                    setIsRecording(false);
-                    isRecordingRef.current = false;
-                };
-
-                recognitionRef.current.onend = () => {
-                    if (isRecordingRef.current) {
-                        try {
-                            recognitionRef.current.start();
-                        } catch (err) {
-                            console.error('Failed to restart recognition:', err);
-                            setIsRecording(false);
-                            isRecordingRef.current = false;
-                        }
-                    }
-                };
-            } else {
-                setError('Speech recognition not supported in this browser. Please use Chrome or Edge.');
-            }
-        }
-
-        return () => {
-            if (recognitionRef.current) {
-                try {
-                    recognitionRef.current.stop();
-                } catch (err) {
-                    console.error('Error stopping recognition:', err);
-                }
-            }
-        };
     }, []);
 
-    // Auto-save when recording stops
+    // Auto-save when recording stops and answer is ready
     useEffect(() => {
-        if (!isRecording && userAnswer.length > 10) {
+        if (!isRecording && !isTranscribing && userAnswer.length > 10) {
             UpdateUserAnswer();
         }
-    }, [isRecording]);
+    }, [isRecording, isTranscribing, userAnswer]);
 
-    const startSpeechToText = () => {
-        if (!recognitionRef.current) {
-            setError('Speech recognition not initialized');
-            return;
-        }
-
+    const startSpeechToText = async () => {
         setError('');
-        setInterimResult('');
         setUserAnswer('');
+        audioChunksRef.current = [];
 
         try {
-            recognitionRef.current.start();
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorderRef.current = new MediaRecorder(stream);
+
+            mediaRecorderRef.current.ondataavailable = (e) => {
+                if (e.data.size > 0) {
+                    audioChunksRef.current.push(e.data);
+                }
+            };
+
+            mediaRecorderRef.current.onstop = async () => {
+                // Stop all mic tracks
+                stream.getTracks().forEach(track => track.stop());
+
+                setIsTranscribing(true);
+                toast.info('Transcribing your answer with Whisper AI...');
+
+                try {
+                    const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                    const audioFile = new File([audioBlob], 'answer.webm', { type: 'audio/webm' });
+
+                    const transcription = await groq.audio.transcriptions.create({
+                        file: audioFile,
+                        model: 'whisper-large-v3',
+                        language: 'en',
+                    });
+
+                    const transcribedText = transcription.text?.trim();
+                    if (transcribedText) {
+                        setUserAnswer(transcribedText);
+                        toast.success('Transcription complete!');
+                    } else {
+                        setError('No speech detected. Please try again.');
+                    }
+                } catch (err) {
+                    console.error('Transcription error:', err);
+                    setError('Transcription failed: ' + err.message);
+                    toast.error('Transcription failed. Please try again.');
+                } finally {
+                    setIsTranscribing(false);
+                }
+            };
+
+            mediaRecorderRef.current.start();
             setIsRecording(true);
             isRecordingRef.current = true;
             toast.info('Recording started. Speak your answer...');
+
         } catch (err) {
-            if (err.name === 'InvalidStateError') {
-                console.log('Recognition already running');
+            if (err.name === 'NotAllowedError') {
+                setError('Microphone access denied. Please enable microphone permissions.');
             } else {
                 setError('Failed to start recording: ' + err.message);
-                setIsRecording(false);
-                isRecordingRef.current = false;
             }
         }
     };
 
     const stopSpeechToText = () => {
-        if (recognitionRef.current) {
+        if (mediaRecorderRef.current && isRecordingRef.current) {
             try {
                 isRecordingRef.current = false;
-                recognitionRef.current.stop();
+                mediaRecorderRef.current.stop();
                 setIsRecording(false);
-                setInterimResult('');
             } catch (err) {
-                console.error('Error stopping recognition:', err);
+                console.error('Error stopping recording:', err);
             }
         }
     };
@@ -192,7 +151,7 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
         }
 
         const currentQuestion = mockInterviewQuestions[activeQuestionIndex]?.question;
-        const correctAnswer   = mockInterviewQuestions[activeQuestionIndex]?.answer;
+        const correctAnswer = mockInterviewQuestions[activeQuestionIndex]?.answer;
 
         if (!currentQuestion) {
             toast.error('Invalid question data. Please try again.');
@@ -212,7 +171,6 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
         setLoading(true);
 
         try {
-            // ── Use Semantic AI Model instead of Gemini ──────────────
             toast.info('Analysing your answer with AI...');
 
             const { rating, feedback, normalizedAnswer, breakdown } = await generateFeedback(
@@ -221,23 +179,18 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                 correctAnswer || ''
             );
 
-            // Use normalized answer (proper caps + punctuation) for DB storage
             const answerToSave = normalizedAnswer || finalAnswer;
 
-            // Log feedback to console
             console.log('==========================================');
             console.log('📊 INTERVIEW FEEDBACK (Semantic AI)');
             console.log('==========================================');
             console.log('Question:', currentQuestion);
-            console.log('------------------------------------------');
             console.log('User Answer:', finalAnswer);
-            console.log('------------------------------------------');
             console.log('Rating:', rating);
             console.log('Feedback:', feedback);
             console.log('Breakdown:', breakdown);
             console.log('==========================================');
 
-            // ── Save to database ─────────────────────────────────────
             try {
                 const existingAnswer = await db
                     .select()
@@ -253,11 +206,11 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                     await db
                         .update(userAnswers)
                         .set({
-                            userAns:    answerToSave,
-                            feedback:   feedback,
-                            rating:     rating,
+                            userAns: answerToSave,
+                            feedback: feedback,
+                            rating: rating,
                             correctAns: correctAnswer || '',
-                            createdAt:  moment().format('DD-MM-YYYY')
+                            createdAt: moment().format('DD-MM-YYYY')
                         })
                         .where(
                             and(
@@ -268,14 +221,14 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                     toast.success('Answer updated successfully!');
                 } else {
                     await db.insert(userAnswers).values({
-                        mockIdRef:  interviewData.mockId,
-                        question:   currentQuestion,
+                        mockIdRef: interviewData.mockId,
+                        question: currentQuestion,
                         correctAns: correctAnswer || '',
-                        userAns:    answerToSave,
-                        feedback:   feedback,
-                        rating:     rating,
-                        userEmail:  user.primaryEmailAddress.emailAddress,
-                        createdAt:  moment().format('DD-MM-YYYY')
+                        userAns: answerToSave,
+                        feedback: feedback,
+                        rating: rating,
+                        userEmail: user.primaryEmailAddress.emailAddress,
+                        createdAt: moment().format('DD-MM-YYYY')
                     });
                     toast.success('Answer saved successfully!');
                 }
@@ -337,7 +290,7 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                             <Webcam
                                 ref={webcamRef}
                                 mirrored={true}
-                                audio={true}
+                                audio={false}  // ✅ Fixed: was true, caused echo
                                 className='rounded-lg'
                                 style={{ height: '100%', width: '100%', objectFit: 'cover' }}
                             />
@@ -345,6 +298,12 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                                 <div className='absolute top-3 right-3 flex items-center gap-2 bg-red-600 text-white px-3 py-1.5 rounded-full text-xs font-semibold'>
                                     <span className='w-2 h-2 bg-white rounded-full animate-pulse'></span>
                                     Recording
+                                </div>
+                            )}
+                            {isTranscribing && (
+                                <div className='absolute top-3 left-3 flex items-center gap-2 bg-blue-600 text-white px-3 py-1.5 rounded-full text-xs font-semibold'>
+                                    <span className='w-2 h-2 bg-white rounded-full animate-pulse'></span>
+                                    Transcribing...
                                 </div>
                             )}
                         </>
@@ -357,14 +316,17 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                 </div>
 
                 {/* Live Transcript */}
-                {(userAnswer || interimResult) && (
+                {userAnswer && (
                     <div className='mt-4 w-full p-4 bg-gray-50 border border-gray-200 rounded-lg max-h-40 overflow-y-auto'>
                         <h3 className='text-sm font-semibold text-gray-700 mb-2'>Your Answer:</h3>
-                        <p className='text-sm text-gray-800'>
-                            {userAnswer}
-                            {interimResult && (
-                                <span className='text-gray-500 italic'>{interimResult}</span>
-                            )}
+                        <p className='text-sm text-gray-800'>{userAnswer}</p>
+                    </div>
+                )}
+
+                {isTranscribing && (
+                    <div className='mt-4 w-full p-4 bg-blue-50 border border-blue-200 rounded-lg'>
+                        <p className='text-blue-600 text-sm text-center animate-pulse'>
+                            🎙️ Transcribing your answer with Whisper AI...
                         </p>
                     </div>
                 )}
@@ -389,9 +351,9 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                     {/* Record Button */}
                     <button
                         onClick={handleRecording}
-                        disabled={!isWebcamEnabled || loading}
+                        disabled={!isWebcamEnabled || loading || isTranscribing}
                         className={`w-full px-6 py-2 rounded-lg font-semibold transition flex items-center justify-center gap-2 ${
-                            !isWebcamEnabled || loading
+                            !isWebcamEnabled || loading || isTranscribing
                                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                                 : isRecording
                                     ? 'bg-red-600 text-white hover:bg-red-700'
@@ -401,9 +363,11 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                         <Mic className='w-4 h-4' />
                         {loading
                             ? 'Analysing with AI...'
-                            : isRecording
-                                ? 'Stop Recording'
-                                : 'Record Answer'}
+                            : isTranscribing
+                                ? 'Transcribing...'
+                                : isRecording
+                                    ? 'Stop Recording'
+                                    : 'Record Answer'}
                     </button>
                 </div>
 

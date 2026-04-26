@@ -3,7 +3,7 @@
 
 import Groq from "groq-sdk";
 
-const apiKey = process.env.GROQ_API_KEY;
+const apiKey = process.env.NEXT_PUBLIC_GROQ_API_KEY;
 
 let groq = null;
 let chatSession = null;
@@ -71,7 +71,7 @@ if (apiKey) {
         console.error("Failed to initialize Groq:", error);
     }
 } else {
-    console.warn("⚠️ GROQ_API_KEY not found - AI features will be disabled");
+    console.warn("⚠️ NEXT_PUBLIC_GROQ_API_KEY not found - AI features will be disabled");
 }
 
 // Export chat session for interview feedback
@@ -89,14 +89,14 @@ async function generateInterviewQuestions(formData) {
     console.log("==================");
 
     if (!apiKey) {
-        console.error("ERROR: GROQ_API_KEY is not set in environment variables");
+        console.error("ERROR: NEXT_PUBLIC_GROQ_API_KEY is not set in environment variables");
         alert("API Key is missing! Please check your .env.local file");
         return {
             questions: [
                 {
                     id: 1,
                     question: "API Key Missing",
-                    answer: "Please set GROQ_API_KEY in your .env.local file",
+                    answer: "Please set NEXT_PUBLIC_GROQ_API_KEY in your .env.local file",
                 },
             ],
         };
@@ -184,7 +184,7 @@ Generate exactly ${questionCount} questions appropriate for someone with ${formD
 
         // Provide helpful error messages
         if (error.message?.includes("API key")) {
-            alert("Invalid API key. Please check your GROQ_API_KEY in .env.local");
+            alert("Invalid API key. Please check your NEXT_PUBLIC_GROQ_API_KEY in .env.local");
         } else if (error.message?.includes("rate limit")) {
             alert("Rate limit exceeded. Please wait a moment and try again.");
         } else {
