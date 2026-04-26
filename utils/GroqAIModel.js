@@ -184,7 +184,7 @@ Generate exactly ${questionCount} questions appropriate for someone with ${formD
 
         // Provide helpful error messages
         if (error.message?.includes("API key")) {
-            alert("Invalid API key. Please check your NEXT_PUBLIC_GROQ_API_KEY in .env.local");
+            alert("Invalid API key. Please check your GROQ_API_KEY in .env.local");
         } else if (error.message?.includes("rate limit")) {
             alert("Rate limit exceeded. Please wait a moment and try again.");
         } else {
