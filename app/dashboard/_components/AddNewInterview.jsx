@@ -3,8 +3,7 @@ import React, { useState } from "react";
 import { useUser } from "@clerk/nextjs";
 import { v4 as uuidv4 } from "uuid";
 import moment from "moment";
-import { db } from "@/utils/db";
-import { MockInterview } from "@/utils/schema";
+import { saveInterview } from "@/app/actions/interview";
 import generateInterviewQuestions from "../../../utils/GroqAIModel.js";
 import { useRouter } from "next/navigation";
 
@@ -73,21 +72,17 @@ const AddNewInterview = ({ onInterviewStart }) => {
             // Prepare and save data directly to database
             const mockId = uuidv4();
 
-            const resp = await db.insert(MockInterview)
-                .values({
-                    mockId: mockId,
-                    jsonMockResp: JSON.stringify(interviewQuestions),
-                    jobPosition: formData.role,
-                    jobDesc: formData.description,
-                    jobExperience: formData.experience,
-                    createdBy: user?.primaryEmailAddress?.emailAddress,
-                    createdAt: moment().format('DD-MM-yyyy')
-                })
-                .returning({ mockId: MockInterview.mockId });
+            const savedMockId = await saveInterview({
+                mockId: mockId,
+                jsonMockResp: JSON.stringify(interviewQuestions),
+                jobPosition: formData.role,
+                jobDesc: formData.description,
+                jobExperience: formData.experience,
+                createdBy: user?.primaryEmailAddress?.emailAddress,
+                createdAt: moment().format('DD-MM-yyyy')
+            });
 
-            console.log("Interview saved to database:", resp);
-
-            const savedMockId = resp[0]?.mockId;
+            console.log("Interview saved to database:", savedMockId);
 
             // Call parent callback with complete data
             if (interviewQuestions && onInterviewStart) {

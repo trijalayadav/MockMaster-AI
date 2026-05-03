@@ -1,26 +1,18 @@
 "use client"
 import dynamic from 'next/dynamic';
-import { Webcam as WebcamIcon, Mic, Video, VideoOff } from 'lucide-react'
+import { Webcam as WebcamIcon, Mic, Video, VideoOff, CheckCircle } from 'lucide-react'
 import React, { useState, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
 import { generateFeedback } from '@/utils/semanticFeedbackModel';
-import { db } from '@/utils/db';
-import { userAnswers } from '@/utils/schema';
+import { getExistingAnswer, saveUserAnswer, updateUserAnswer } from '@/app/actions/interview';
 import { useUser } from '@clerk/nextjs';
+import { useRouter } from 'next/navigation';
 import moment from 'moment';
-import { eq, and } from 'drizzle-orm';
-import Groq from 'groq-sdk';
 
-// Dynamically import to avoid SSR issues
 const Webcam = dynamic(() => import('react-webcam'), { ssr: false });
 
-// Groq client for Whisper transcription
-const groq = new Groq({
-    apiKey: process.env.NEXT_PUBLIC_GROQ_API_KEY,
-    dangerouslyAllowBrowser: true
-});
-
 function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, interviewData }) {
+    const router = useRouter();
     const [isWebcamEnabled, setIsWebcamEnabled] = useState(false);
     const [isMounted, setIsMounted] = useState(false);
     const webcamRef = useRef(null);
@@ -34,11 +26,14 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
     const isRecordingRef = useRef(false);
     const { user } = useUser();
 
-    // Reset answer when question changes
+    const [answeredQuestions, setAnsweredQuestions] = useState(new Set());
+
+    const totalQuestions = mockInterviewQuestions?.length || 0;
+    const allAnswered = answeredQuestions.size === totalQuestions && totalQuestions > 0;
+
     useEffect(() => {
         setUserAnswer('');
         setError('');
-
         if (isRecordingRef.current && mediaRecorderRef.current) {
             try {
                 isRecordingRef.current = false;
@@ -54,7 +49,6 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
         setIsMounted(true);
     }, []);
 
-    // Auto-save when recording stops and answer is ready
     useEffect(() => {
         if (!isRecording && !isTranscribing && userAnswer.length > 10) {
             UpdateUserAnswer();
@@ -77,9 +71,7 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
             };
 
             mediaRecorderRef.current.onstop = async () => {
-                // Stop all mic tracks
                 stream.getTracks().forEach(track => track.stop());
-
                 setIsTranscribing(true);
                 toast.info('Transcribing your answer with Whisper AI...');
 
@@ -87,13 +79,22 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                     const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                     const audioFile = new File([audioBlob], 'answer.webm', { type: 'audio/webm' });
 
-                    const transcription = await groq.audio.transcriptions.create({
-                        file: audioFile,
-                        model: 'whisper-large-v3',
-                        language: 'en',
+                    const formData = new FormData();
+                    formData.append('file', audioFile);
+
+                    const transcribeRes = await fetch('/api/transcribe', {
+                        method: 'POST',
+                        body: formData,
                     });
 
-                    const transcribedText = transcription.text?.trim();
+                    const transcribeData = await transcribeRes.json();
+
+                    if (!transcribeRes.ok) {
+                        throw new Error(transcribeData.error || 'Transcription request failed');
+                    }
+
+                    const transcribedText = transcribeData.text?.trim();
+
                     if (transcribedText) {
                         setUserAnswer(transcribedText);
                         toast.success('Transcription complete!');
@@ -103,7 +104,7 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                 } catch (err) {
                     console.error('Transcription error:', err);
                     setError('Transcription failed: ' + err.message);
-                    toast.error('Transcription failed. Please try again.');
+                    toast.error('Transcription failed: ' + err.message);
                 } finally {
                     setIsTranscribing(false);
                 }
@@ -173,7 +174,7 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
         try {
             toast.info('Analysing your answer with AI...');
 
-            const { rating, feedback, normalizedAnswer, breakdown } = await generateFeedback(
+            const { rating, feedback, normalizedAnswer } = await generateFeedback(
                 currentQuestion,
                 finalAnswer,
                 correctAnswer || ''
@@ -181,46 +182,20 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
 
             const answerToSave = normalizedAnswer || finalAnswer;
 
-            console.log('==========================================');
-            console.log('📊 INTERVIEW FEEDBACK (Semantic AI)');
-            console.log('==========================================');
-            console.log('Question:', currentQuestion);
-            console.log('User Answer:', finalAnswer);
-            console.log('Rating:', rating);
-            console.log('Feedback:', feedback);
-            console.log('Breakdown:', breakdown);
-            console.log('==========================================');
-
             try {
-                const existingAnswer = await db
-                    .select()
-                    .from(userAnswers)
-                    .where(
-                        and(
-                            eq(userAnswers.mockIdRef, interviewData.mockId),
-                            eq(userAnswers.question, currentQuestion)
-                        )
-                    );
+                const existingAnswer = await getExistingAnswer(interviewData.mockId, currentQuestion);
 
                 if (existingAnswer.length > 0) {
-                    await db
-                        .update(userAnswers)
-                        .set({
-                            userAns: answerToSave,
-                            feedback: feedback,
-                            rating: rating,
-                            correctAns: correctAnswer || '',
-                            createdAt: moment().format('DD-MM-YYYY')
-                        })
-                        .where(
-                            and(
-                                eq(userAnswers.mockIdRef, interviewData.mockId),
-                                eq(userAnswers.question, currentQuestion)
-                            )
-                        );
+                    await updateUserAnswer(interviewData.mockId, currentQuestion, {
+                        userAns: answerToSave,
+                        feedback: feedback,
+                        rating: rating,
+                        correctAns: correctAnswer || '',
+                        createdAt: moment().format('DD-MM-YYYY')
+                    });
                     toast.success('Answer updated successfully!');
                 } else {
-                    await db.insert(userAnswers).values({
+                    await saveUserAnswer({
                         mockIdRef: interviewData.mockId,
                         question: currentQuestion,
                         correctAns: correctAnswer || '',
@@ -232,6 +207,13 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                     });
                     toast.success('Answer saved successfully!');
                 }
+
+                setAnsweredQuestions(prev => {
+                    const updated = new Set(prev);
+                    updated.add(activeQuestionIndex);
+                    return updated;
+                });
+
             } catch (dbError) {
                 console.error('Database error:', dbError);
                 toast.error('Failed to save answer to database. Please try again.');
@@ -281,16 +263,34 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
 
     return (
         <div className='flex items-center justify-center flex-col'>
-            <div className='flex flex-col justify-center items-center p-5 border rounded-lg w-full'>
+            {/* Progress indicator */}
+            <div className='w-full mb-3'>
+                <div className='flex justify-between items-center mb-1'>
+                    <span className='text-xs text-gray-500'>
+                        {answeredQuestions.size} of {totalQuestions} answered
+                    </span>
+                    {allAnswered && (
+                        <span className='text-xs text-green-600 font-medium flex items-center gap-1'>
+                            <CheckCircle className='w-3 h-3' /> All done!
+                        </span>
+                    )}
+                </div>
+                <div className='w-full h-1.5 bg-gray-200 rounded-full overflow-hidden'>
+                    <div
+                        className='h-full bg-primary rounded-full transition-all duration-500'
+                        style={{ width: `${(answeredQuestions.size / totalQuestions) * 100}%` }}
+                    />
+                </div>
+            </div>
 
-                {/* Webcam Display */}
+            <div className='flex flex-col justify-center items-center p-5 border rounded-lg w-full'>
                 <div className='relative flex justify-center items-center bg-black rounded-lg w-full h-72 overflow-hidden'>
                     {isWebcamEnabled ? (
                         <>
                             <Webcam
                                 ref={webcamRef}
                                 mirrored={true}
-                                audio={false}  // ✅ Fixed: was true, caused echo
+                                audio={false}
                                 className='rounded-lg'
                                 style={{ height: '100%', width: '100%', objectFit: 'cover' }}
                             />
@@ -306,6 +306,11 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                                     Transcribing...
                                 </div>
                             )}
+                            {answeredQuestions.has(activeQuestionIndex) && (
+                                <div className='absolute bottom-3 left-3 flex items-center gap-1.5 bg-green-600 text-white px-3 py-1.5 rounded-full text-xs font-semibold'>
+                                    <CheckCircle className='w-3 h-3' /> Answered
+                                </div>
+                            )}
                         </>
                     ) : (
                         <div className='text-center'>
@@ -315,7 +320,6 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                     )}
                 </div>
 
-                {/* Live Transcript */}
                 {userAnswer && (
                     <div className='mt-4 w-full p-4 bg-gray-50 border border-gray-200 rounded-lg max-h-40 overflow-y-auto'>
                         <h3 className='text-sm font-semibold text-gray-700 mb-2'>Your Answer:</h3>
@@ -332,7 +336,6 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                 )}
 
                 <div className='mt-4 w-full space-y-3'>
-                    {/* Webcam Toggle */}
                     <button
                         onClick={() => setIsWebcamEnabled(!isWebcamEnabled)}
                         className={`w-full px-6 py-2 rounded-lg font-medium transition flex items-center justify-center gap-2 ${
@@ -348,7 +351,6 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                         )}
                     </button>
 
-                    {/* Record Button */}
                     <button
                         onClick={handleRecording}
                         disabled={!isWebcamEnabled || loading || isTranscribing}
@@ -369,9 +371,20 @@ function RecordAnswerSection({ mockInterviewQuestions, activeQuestionIndex, inte
                                     ? 'Stop Recording'
                                     : 'Record Answer'}
                     </button>
+
+                    {/* ✅ Redirects to feedback page instead of showing analysis inline */}
+                    {allAnswered && (
+                        <button
+                            onClick={() => router.push(`/dashboard/interview/${interviewData?.mockId}/feedback`)}
+                            disabled={loading || isRecording || isTranscribing}
+                            className='w-full px-6 py-2 rounded-lg font-semibold bg-green-600 text-white hover:bg-green-700 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed'
+                        >
+                            <CheckCircle className='w-4 h-4' />
+                            View Feedback
+                        </button>
+                    )}
                 </div>
 
-                {/* Error Display */}
                 {error && (
                     <div className='mt-3 p-3 bg-red-50 border border-red-200 rounded-lg w-full'>
                         <p className='text-red-600 text-sm'>{error}</p>
